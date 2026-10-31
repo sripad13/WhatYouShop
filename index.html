@@ -40,6 +40,7 @@
 <meta property="og:description" content="Fresh product picks every day.">
 <meta property="og:image" content="https://sripad13.github.io/WhatYouShop/images/logo.png">
 <meta name="twitter:card" content="summary">
+<link rel="preload" as="image" href="images/placeholder.png">
 <link rel="icon" href="images/favicon-32.png?v=2" type="image/png" sizes="32x32">
 <link rel="icon" href="images/favicon.png?v=2" type="image/png" sizes="64x64">
 <link rel="apple-touch-icon" href="images/apple-touch-icon.png?v=2">
@@ -103,10 +104,18 @@
   .item:hover { border-color: var(--accent); transform: translateY(-2px); }
   .item:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   .media { position: relative; overflow: hidden; border-radius: 13px; background: var(--tile); aspect-ratio: 1 / 1; }
-  .media img, .media .ph { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s cubic-bezier(.2,.7,.2,1); }
+  .media::before {
+    content: ""; position: absolute; inset: 0;
+    background: url("images/placeholder.png") center / 56% no-repeat;
+  }
+  .media img {
+    position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; display: block;
+    opacity: 0; transition: opacity .4s ease, transform .5s cubic-bezier(.2,.7,.2,1);
+  }
+  .media img.ready { opacity: 1; }
   .item:hover .media img { transform: scale(1.04); }
   .badge {
-    position: absolute; top: 8px; left: 8px; padding: 3px 9px; border-radius: 99px;
+    position: absolute; z-index: 2; top: 8px; left: 8px; padding: 3px 9px; border-radius: 99px;
     background: var(--ink); color: var(--bg); font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
   }
   .meta { padding: 12px 6px 14px; }
@@ -286,11 +295,10 @@ var CONFIG = {
     var media = document.createElement('div');
     media.className = 'media';
     var img = document.createElement('img');
-    img.src = resolveImg(it.image); img.alt = ''; img.loading = 'lazy';
-    img.onerror = function () {
-      var ph = document.createElement('div'); ph.className = 'ph';
-      img.replaceWith(ph);
-    };
+    img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+    img.onload = function () { img.classList.add('ready'); };
+    img.onerror = function () { img.remove(); };
+    img.src = resolveImg(it.image);
     media.appendChild(img);
     if (it.date === today) {
       var b = document.createElement('span'); b.className = 'badge'; b.textContent = 'New';
