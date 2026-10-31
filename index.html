@@ -2,6 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-K96FNKL8KD"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-K96FNKL8KD');
+</script>
+
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5258499980991150"
+     crossorigin="anonymous"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>What You Shop</title>
 <meta name="description" content="Fresh product picks every day from What You Shop.">
@@ -28,9 +40,9 @@
 <meta property="og:description" content="Fresh product picks every day.">
 <meta property="og:image" content="https://sripad13.github.io/WhatYouShop/images/logo.png">
 <meta name="twitter:card" content="summary">
-<link rel="icon" href="favicon-32.png?v=2" type="image/png" sizes="32x32">
-<link rel="icon" href="favicon.png?v=2" type="image/png" sizes="64x64">
-<link rel="apple-touch-icon" href="apple-touch-icon.png?v=2">
+<link rel="icon" href="images/favicon-32.png?v=2" type="image/png" sizes="32x32">
+<link rel="icon" href="images/favicon.png?v=2" type="image/png" sizes="64x64">
+<link rel="apple-touch-icon" href="images/apple-touch-icon.png?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,800&display=swap" rel="stylesheet">
@@ -183,6 +195,7 @@ window.addEventListener('error', function (e) { var l = document.getElementById(
 var CONFIG = {
   name: "What You Shop",
   mustBuy: "images/Must-Buy.png",
+  repo: "sripad13/WhatYouShop",   // used to match image names ignoring capitals, spaces and hyphens
   disclosure: "Powered by Zociowl.",
   sheetCsvUrl: "https://docs.google.com/spreadsheets/d/1rDLPr0m2iSNr4kL0xC1pLUbqnNnptrRT2EFWJPiACEQ/gviz/tq?tqx=out:csv"
 };
@@ -234,6 +247,34 @@ var CONFIG = {
     }).filter(function (p) { return p.title && p.url; });
   }
 
+  var imgMap = {};
+  function norm(p) {
+    var d = p; try { d = decodeURIComponent(p); } catch (e) {}
+    return d.toLowerCase().replace(/[\s_-]+/g, '');
+  }
+  function resolveImg(path) {
+    path = (path || '').trim();
+    if (!path || /^(https?:|data:|\/\/)/i.test(path)) return path;
+    path = path.replace(/^\.?\//, '');
+    if (path.indexOf('/') < 0) path = 'images/' + path;
+    return imgMap[norm(path)] || path;
+  }
+  function loadImgMap() {
+    if (!CONFIG.repo) return Promise.resolve({});
+    try { var c = sessionStorage.getItem('imgmap'); if (c) return Promise.resolve(JSON.parse(c)); } catch (e) {}
+    return fetch('https://api.github.com/repos/' + CONFIG.repo + '/contents/images')
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (list) {
+        var m = {};
+        (Array.isArray(list) ? list : []).forEach(function (f) {
+          if (f.type === 'file') m['' + norm('images/' + f.name)] = 'images/' + f.name;
+        });
+        if (Object.keys(m).length) { try { sessionStorage.setItem('imgmap', JSON.stringify(m)); } catch (e) {} }
+        return m;
+      })
+      .catch(function () { return {}; });
+  }
+
   var ALL = [], today = iso(new Date()), input = document.getElementById('q');
 
   function card(it, n) {
@@ -245,7 +286,7 @@ var CONFIG = {
     var media = document.createElement('div');
     media.className = 'media';
     var img = document.createElement('img');
-    img.src = it.image; img.alt = ''; img.loading = 'lazy';
+    img.src = resolveImg(it.image); img.alt = ''; img.loading = 'lazy';
     img.onerror = function () {
       var ph = document.createElement('div'); ph.className = 'ph';
       img.replaceWith(ph);
@@ -303,7 +344,9 @@ var CONFIG = {
     : fetch('products.json', { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }).then(function (d) { return d.products || []; });
 
   var timeout = new Promise(function (_, reject) { setTimeout(function () { reject(new Error('timed out')); }, 15000); });
-  Promise.race([load, timeout]).then(render).catch(function (err) {
+  var files = Promise.race([loadImgMap(), new Promise(function (res) { setTimeout(function () { res({}); }, 3000); })])
+    .then(function (m) { imgMap = m; });
+  Promise.race([Promise.all([load, files]).then(function (r) { return r[0]; }), timeout]).then(render).catch(function (err) {
     list.innerHTML = '';
     var n = document.createElement('p'); n.className = 'note';
     n.textContent = 'Couldn’t load products (' + (err && err.message ? err.message : 'unknown error') + '). Check the sheet link in index.html.';
