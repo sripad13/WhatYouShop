@@ -256,49 +256,108 @@ var CONFIG = {
     }).filter(function (p) { return p.title && p.url; });
   }
 
-  var imgMap = {};
+  // ---- Image names: matched ignoring capitals, spaces, hyphens and underscores ----
+  var MAP_KEY = 'imgmap2', MAP_TTL = 6 * 3600 * 1000, MISS_WAIT = 5 * 60 * 1000, mapPromise = null;
   function norm(p) {
     var d = p; try { d = decodeURIComponent(p); } catch (e) {}
     return d.toLowerCase().replace(/[\s_-]+/g, '');
   }
-  function resolveImg(path) {
+  function cleanPath(path) {
     path = (path || '').trim();
     if (!path || /^(https?:|data:|\/\/)/i.test(path)) return path;
     path = path.replace(/^\.?\//, '');
-    if (path.indexOf('/') < 0) path = 'images/' + path;
-    return imgMap[norm(path)] || path;
+    return path.indexOf('/') < 0 ? 'images/' + path : path;
   }
-  function loadImgMap() {
-    if (!CONFIG.repo) return Promise.resolve({});
-    try { var c = sessionStorage.getItem('imgmap'); if (c) return Promise.resolve(JSON.parse(c)); } catch (e) {}
-    return fetch('https://api.github.com/repos/' + CONFIG.repo + '/contents/images')
-      .then(function (r) { return r.ok ? r.json() : []; })
+  function readCache() {
+    try {
+      var c = JSON.parse(localStorage.getItem(MAP_KEY));
+      if (c && c.m && Date.now() - c.t < MAP_TTL) return c;
+    } catch (e) {}
+    return null;
+  }
+  function getJSON(u) {
+    return fetch(u).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+  }
+  // Looks up the real file names once per visit, only when an image fails to load.
+  // Tries GitHub first, then jsDelivr (which has no tight rate limit) as a backup.
+  function freshMap() {
+    if (mapPromise) return mapPromise;
+    var repo = CONFIG.repo;
+    mapPromise = getJSON('https://api.github.com/repos/' + repo + '/contents/images')
       .then(function (list) {
-        var m = {};
-        (Array.isArray(list) ? list : []).forEach(function (f) {
-          if (f.type === 'file') m['' + norm('images/' + f.name)] = 'images/' + f.name;
+        if (!Array.isArray(list)) throw new Error('bad list');
+        return list.filter(function (f) { return f.type === 'file'; }).map(function (f) { return 'images/' + f.name; });
+      })
+      .catch(function () {
+        return getJSON('https://data.jsdelivr.com/v1/package/gh/' + repo + '@main/flat').then(function (d) {
+          return (d.files || []).map(function (f) { return f.name.replace(/^\//, ''); })
+            .filter(function (n) { return /^images\//i.test(n); });
         });
-        if (Object.keys(m).length) { try { sessionStorage.setItem('imgmap', JSON.stringify(m)); } catch (e) {} }
+      })
+      .then(function (names) {
+        var m = {};
+        names.forEach(function (n) { m[norm(n)] = n; });
+        if (names.length) { try { localStorage.setItem(MAP_KEY, JSON.stringify({ t: Date.now(), m: m })); } catch (e) {} }
         return m;
       })
       .catch(function () { return {}; });
+    return mapPromise;
+  }
+  function setImage(img, raw) {
+    var path = cleanPath(raw);
+    if (!path || /^(https?:|data:|\/\/)/i.test(path)) { img.src = path; return; }
+    var key = norm(path), cache = readCache(), cur = (cache && cache.m[key]) || path, stage = 0;
+    function swap(m) {
+      var fixed = m && m[key];
+      if (fixed && fixed !== cur) { cur = fixed; img.src = fixed; return true; }
+      return false;
+    }
+    img.onerror = function () {
+      if (stage === 0) {
+        stage = 1;
+        if (cache && swap(cache.m)) return;
+      }
+      if (stage === 1) {
+        stage = 2;
+        if (cache && Date.now() - cache.t < MISS_WAIT) { img.remove(); return; }
+        freshMap().then(function (m) { if (!swap(m)) img.remove(); else stage = 3; });
+        return;
+      }
+      img.remove();
+    };
+    img.src = cur;
   }
 
+  // Sends an event to Google Analytics (silently does nothing if GA is blocked)
+  function track_(name, params) {
+    try { if (typeof gtag === 'function') gtag('event', name, params || {}); } catch (e) {}
+  }
   var ALL = [], today = iso(new Date()), input = document.getElementById('q');
 
-  function card(it, n) {
+  function card(it, n, pos) {
     var a = document.createElement('a');
     a.className = 'item';
     a.style.setProperty('--i', Math.min(n, 12));
     a.href = it.url; a.target = '_blank'; a.rel = 'sponsored noopener noreferrer';
+    var track = function () {
+      track_('product_click', {
+        product_name: it.title,
+        product_url: it.url,
+        product_date: it.date || '',
+        position: pos + 1,
+        must_buy: it.must ? 'yes' : 'no',
+        search_term: input.value.trim().toLowerCase().slice(0, 60)
+      });
+    };
+    a.addEventListener('click', track);
+    a.addEventListener('auxclick', function (e) { if (e.button === 1) track(); });
 
     var media = document.createElement('div');
     media.className = 'media';
     var img = document.createElement('img');
     img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
     img.onload = function () { img.classList.add('ready'); };
-    img.onerror = function () { img.remove(); };
-    img.src = resolveImg(it.image);
+    setImage(img, it.image);
     media.appendChild(img);
     if (it.date === today) {
       var b = document.createElement('span'); b.className = 'badge'; b.textContent = 'New';
@@ -331,7 +390,7 @@ var CONFIG = {
       n.textContent = q ? 'No products match “' + input.value.trim() + '”.' : 'No picks yet. Check back soon.';
       grid.appendChild(n);
     } else {
-      shown.forEach(function (it, i) { grid.appendChild(card(it, i)); });
+      shown.forEach(function (it, i) { grid.appendChild(card(it, i, i)); });
     }
     list.appendChild(grid);
   }
@@ -345,16 +404,25 @@ var CONFIG = {
     });
     draw(true);
   }
-  input.addEventListener('input', function () { draw(false); });
+  var searchTimer;
+  input.addEventListener('input', function () {
+    draw(false);
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      var q = input.value.trim().toLowerCase();
+      if (q.length > 1) track_('site_search', { search_term: q.slice(0, 60), results: document.querySelectorAll('.item').length });
+    }, 900);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.follow a'), function (el) {
+    el.addEventListener('click', function () { track_('follow_click', { network: el.getAttribute('aria-label') }); });
+  });
 
   var load = CONFIG.sheetCsvUrl
     ? fetch(CONFIG.sheetCsvUrl, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); }).then(fromCSV)
     : fetch('products.json', { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }).then(function (d) { return d.products || []; });
 
   var timeout = new Promise(function (_, reject) { setTimeout(function () { reject(new Error('timed out')); }, 15000); });
-  var files = Promise.race([loadImgMap(), new Promise(function (res) { setTimeout(function () { res({}); }, 3000); })])
-    .then(function (m) { imgMap = m; });
-  Promise.race([Promise.all([load, files]).then(function (r) { return r[0]; }), timeout]).then(render).catch(function (err) {
+  Promise.race([load, timeout]).then(render).catch(function (err) {
     list.innerHTML = '';
     var n = document.createElement('p'); n.className = 'note';
     n.textContent = 'Couldn’t load products (' + (err && err.message ? err.message : 'unknown error') + '). Check the sheet link in index.html.';
